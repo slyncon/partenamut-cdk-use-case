@@ -50,10 +50,11 @@ and standard Ubuntu runners, and never authenticates to AWS or deploys.
 
 ## Versioned consumption
 
-Teams install the tagged source from the existing Platform repository:
+Release tags label versions; each team installs the full source commit from its
+`requirements.txt`:
 
 ```text
-cdk-launchpad @ git+https://github.com/slyncon/partenamut-cdk-use-case.git@v0.1.1
+cdk-launchpad @ git+https://github.com/slyncon/partenamut-cdk-use-case.git@<full-release-commit>
 ```
 
 The Platform repository is [slyncon/partenamut-cdk-use-case](https://github.com/slyncon/partenamut-cdk-use-case).
@@ -62,9 +63,10 @@ See [pip VCS dependencies](https://pip.pypa.io/en/stable/topics/vcs-support/).
 
 For the next release, update `project.version`, validate/build, commit the change,
 and create/push a matching new tag. Keep existing release tags immutable. A team can
-change only its own dependency ref to `@v0.1.1`, reinstall with `--upgrade`, run CI
+change only its own dependency ref to the new full commit, reinstall, run CI
 checks and `cdk diff`, and deploy manually. Other teams can remain on `v0.1.0`.
-A full commit SHA may be used for stronger immutable dependency pinning.
+Both current consumers use full commit pins. Team A also verifies hashes of locked
+third-party dependencies. A package registry is not needed for this pilot.
 
 See **[MIGRATION.md](MIGRATION.md)** for the three-repository layout, release order,
 CI security demonstration, and deployment compatibility checks.
