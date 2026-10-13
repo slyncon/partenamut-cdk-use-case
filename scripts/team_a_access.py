@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 
@@ -17,7 +18,9 @@ def sub(value):
 
 
 def build_template(subject: str) -> dict:
-    if not subject.startswith("repo:") or ":environment:sandbox" not in subject or "*" in subject:
+    if not re.fullmatch(
+        r"repo:[A-Za-z0-9_.-]+@[0-9]+/[A-Za-z0-9_.-]+@[0-9]+:environment:sandbox", subject
+    ):
         raise ValueError("Use an exact repository subject for the sandbox environment")
     audience = "sts.amazonaws.com"
     iam = "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/"
@@ -75,7 +78,7 @@ def build_template(subject: str) -> dict:
                     "s3:PutBucketTagging",
                     "s3:PutBucketNotification",
                     "s3:PutBucketOwnershipControls",
-                    ],
+                ],
                 sub(bucket),
             ),
             statement(

@@ -7,7 +7,8 @@ IAM/OIDC access controls, not an additional application service.
 
 ## Credentials: temporary identity, no stored AWS keys
 
-Your laptop keeps using `partenamut-sso` for the initial setup. GitHub uses OIDC:
+The initial setup uses an authenticated administrative identity in your **personal**
+AWS account. The corporate sandbox/profile is not used. GitHub uses OIDC:
 GitHub identifies a job to AWS, and AWS issues temporary credentials for that job.
 Do not copy access keys, SSO tokens, or `~/.aws` files into GitHub or the repository.
 Only the deployment job can request an OIDC token; validation has no AWS access.
@@ -26,19 +27,31 @@ Do not weaken trust to `repo:slyncon/*` or a wildcard environment.
 
 ## One-time Platform setup
 
-The existing account/region is already bootstrapped. Do not change or replace the
-shared `CDKToolkit` stack. From Platform, generate and inspect the access template:
+No AWS resources have been created for this phase. Once the personal account is
+ready, authenticate your CLI using a temporary administrative session for that
+account. Do not paste credentials into chat. The commands below use your personal
+profile; configuring authentication is a separate AWS prerequisite. A console
+CloudShell session with the necessary administrative permissions is another way
+to perform initial setup without configuring laptop access keys.
+
+From Platform, choose the profile/region and prepare the tools:
 
 ```bash
+export PERSONAL_AWS_PROFILE="<your-personal-account-profile>"
+export AWS_REGION="<your-deployment-region>"
+export AWS_DEFAULT_REGION="$AWS_REGION"
 source .venv/bin/activate
+npm ci
+export PATH="$PWD/node_modules/.bin:$PATH"
 python scripts/team_a_access.py \
   --subject 'repo:slyncon@15962517/cdk-team-a@1417529910:environment:sandbox'
-aws sts get-caller-identity --profile partenamut-sso
+aws sts get-caller-identity --profile "$PERSONAL_AWS_PROFILE"
 aws cloudformation validate-template --template-body file://.build/team-a-access.json \
-  --profile partenamut-sso --region eu-central-1
+  --profile "$PERSONAL_AWS_PROFILE" --region "$AWS_REGION"
 ```
 
-The first setup creates a GitHub OIDC provider, two roles, and a runtime permissions
+Confirm the identity is your personal account before making changes. The first
+setup creates a GitHub OIDC provider, two roles, and a runtime permissions
 boundary. This template expects no existing GitHub provider. If one already exists,
 stop and adapt the template to reference the existing provider rather than creating
 or taking ownership of it. Generated templates and account-specific outputs are
@@ -49,10 +62,10 @@ Review the template before the following human-operated setup command:
 ```bash
 aws cloudformation deploy --stack-name CDKLaunchpadTeamAAccess \
   --template-file .build/team-a-access.json --capabilities CAPABILITY_NAMED_IAM \
-  --profile partenamut-sso --region eu-central-1
+  --profile "$PERSONAL_AWS_PROFILE" --region "$AWS_REGION"
 aws cloudformation describe-stacks --stack-name CDKLaunchpadTeamAAccess \
   --query 'Stacks[0].Outputs' --output table \
-  --profile partenamut-sso --region eu-central-1
+  --profile "$PERSONAL_AWS_PROFILE" --region "$AWS_REGION"
 ```
 
 For an existing Claims stack, attach the new `LambdaBoundaryArn` output to its
@@ -61,20 +74,35 @@ existing Lambda roles before enabling GitHub deployment. List the exact roles:
 ```bash
 aws cloudformation list-stack-resources --stack-name ClaimsTeamStack \
   --query "StackResourceSummaries[?ResourceType=='AWS::IAM::Role'].PhysicalResourceId" \
-  --output table --profile partenamut-sso --region eu-central-1
+  --output table --profile "$PERSONAL_AWS_PROFILE" --region "$AWS_REGION"
 ```
 
 For each specifically verified Claims role, use the boundary output ARN:
 
 ```bash
 aws iam put-role-permissions-boundary --role-name '<verified-Claims-role>' \
-  --permissions-boundary '<LambdaBoundaryArn-output>' --profile partenamut-sso
+  --permissions-boundary '<LambdaBoundaryArn-output>' --profile "$PERSONAL_AWS_PROFILE"
 ```
 
 This narrows existing role permissions immediately; the updated app subsequently
 records the same boundaries in CloudFormation. It is a one-time migration step.
 Do not apply the boundary to your SSO identity, bootstrap roles, deployment role,
 or another team's roles.
+
+A new personal account also needs CDK bootstrap resources once per target region:
+
+```bash
+cdk bootstrap --profile "$PERSONAL_AWS_PROFILE"
+```
+
+Set the same `AWS_REGION`/`AWS_DEFAULT_REGION` above before bootstrapping. This
+creates CDK's supporting asset bucket and roles. GitHub does not bootstrap, and
+the pipeline does not assume the bootstrap administrator roles. Do not run this
+against the corporate account. Do not destroy an existing shared bootstrap stack.
+
+The boundary migration commands above are only for a pre-existing personal Claims
+stack. A fresh personal-account deployment creates bounded roles directly; it
+does not require those migration commands or copy corporate documents.
 
 ## GitHub configuration, step by step
 
@@ -84,8 +112,10 @@ In **cdk-team-a → Settings → Environments**:
 2. Under deployment branches/tags, select specific branches and allow only `main`.
 3. Add environment **variables**, not secrets:
    - `AWS_ACCOUNT_ID`: the account returned by your identity check.
-   - `AWS_REGION`: `eu-central-1` (deployment region, not the SSO authentication region).
-   - `AWS_ROLE_ARN`: the `GitHubRoleArn` output above.
+   - `AWS_REGION`: your selected deployment region (for example `eu-central-1`).
+   - `AWS_ROLE_ARN`: the `GitHubRoleArn` output above, or a role with equivalent
+     scoped permissions and trust. The workflow validates that it belongs to
+     `AWS_ACCOUNT_ID`; no corporate role is hardcoded.
 4. Optionally add a required reviewer to pause before deployment. For a solo sandbox
    demo this can be omitted; automatic deployment still remains limited to `main`.
 
@@ -99,7 +129,26 @@ Apply equivalent protection to Platform and its `Validate platform` check. Prote
 published release tags against update/deletion or use GitHub immutable releases.
 Git access alone cannot configure these settings; verify them in GitHub.
 
+After the personal-account IAM setup, bootstrap, and environment variables have
+been verified, add a **repository variable** under Settings → Secrets and variables
+→ Actions → Variables:
+
+```text
+ENABLE_SANDBOX_DEPLOYMENT=true
+```
+
+This is an explicit activation switch, not a secret. Keep it unset or `false` until
+AWS setup is complete. It is repository-scoped because GitHub evaluates deployment
+job conditions before environment-scoped variables are available. Remove it or
+set it to `false` to stop future deployments without disabling validation.
+No AWS deployments or access resources are created during pipeline preparation.
+
 ## What happens when Team A runs
+
+Deployment is disabled until the sandbox environment allows only `main` and the
+`main` branch is protected with the required `Validate team` check, and the
+activation switch is enabled. This readiness gate uses public GitHub metadata and
+does not prevent validation or development while settings are missing.
 
 A PR runs validation and never deploys. A push to `main`, or **Actions → CI and
 sandbox deployment → Run workflow** on `main`, runs validation and then a separate
@@ -122,7 +171,7 @@ A safe change set is executed; an empty one is reported as no change. Deployment
 are serialized and an in-flight deployment is not cancelled by a newer push.
 The Actions summary records the source commit and actual stack outputs.
 
-The first update adds boundaries and changes handler asset keys to the scoped
+For an existing personal-account stack, the first update adds boundaries and changes handler asset keys to the scoped
 `claims/` bootstrap prefix. Bucket/function logical IDs remain stable. Review the
 first diff: those changes are expected; bucket replacement is not.
 

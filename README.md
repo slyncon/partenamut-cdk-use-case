@@ -72,8 +72,9 @@ CI security demonstration, and deployment compatibility checks.
 ## Deployment and scope
 
 This library repository has no AWS stack to deploy or destroy. Teams independently
-run their own CDK apps using `partenamut-sso`, account `851725255087`, and
-`eu-central-1`. SSO authentication is in `eu-west-1`.
+run their own CDK apps. Team A targets the new personal account through the
+GitHub `sandbox` environment variables; Team B retains manual deployment. The
+existing corporate sandbox and its resources are separate and remain untouched.
 
 Branch protection should require the `Validate platform` check after its first
 successful run. Require PR review, current passing checks, and restrict bypass,
