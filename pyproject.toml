@@ -5,9 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cdk-launchpad"
 version = "0.1.0"
-description = "Local shared CDK constructs for the Partenamut interview demo"
+description = "Reusable secure CDK constructs for developer enablement"
 requires-python = ">=3.12"
 dependencies = ["aws-cdk-lib==2.273.0", "constructs==10.8.1"]
+
+[project.scripts]
+cdk-launchpad-validate = "cdk_launchpad.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
