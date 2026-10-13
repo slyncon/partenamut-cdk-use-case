@@ -28,9 +28,30 @@ def test_raw_insecure_bucket_bypassing_construct_fails(tmp_path):
     # New S3 service defaults do not replace explicit template security settings.
     s3.Bucket(stack, "RawBucket", encryption=s3.BucketEncryption.UNENCRYPTED)
     errors = validate_template(Template.from_stack(stack).to_json())
-    assert len(errors) == 5
+    assert len(errors) == 6
     assert any("BucketEncryption" in error for error in errors)
     assert all(any(flag in error for error in errors) for flag in PUBLIC_ACCESS_FLAGS)
+    assert any("non-TLS" in error for error in errors)
+
+
+@pytest.mark.parametrize("weakening", ["remove", "principal", "transport", "objects"])
+def test_tls_policy_cannot_be_missing_or_weakened(tmp_path, weakening):
+    template = secure_template(tmp_path)
+    policy_id = next(
+        key
+        for key, value in template["Resources"].items()
+        if value["Type"] == "AWS::S3::BucketPolicy"
+    )
+    statement = template["Resources"][policy_id]["Properties"]["PolicyDocument"]["Statement"][0]
+    if weakening == "remove":
+        del template["Resources"][policy_id]
+    elif weakening == "principal":
+        statement["Principal"] = {"AWS": "arn:aws:iam::000000000000:root"}
+    elif weakening == "transport":
+        statement["Condition"]["Bool"]["aws:SecureTransport"] = "true"
+    else:
+        statement["Resource"] = statement["Resource"][:1]
+    assert any("non-TLS" in error for error in validate_template(template))
 
 
 @pytest.mark.parametrize("flag", PUBLIC_ACCESS_FLAGS)

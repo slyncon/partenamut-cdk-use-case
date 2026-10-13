@@ -1,4 +1,4 @@
-"""Demo guardrail for explicit S3 encryption and public-access blocking."""
+"""Demo guardrail for explicit S3 encryption, public-access blocking and TLS."""
 
 import json
 from pathlib import Path
@@ -9,6 +9,32 @@ PUBLIC_ACCESS_FLAGS = (
     "IgnorePublicAcls",
     "RestrictPublicBuckets",
 )
+
+
+def enforces_tls(template: dict, bucket_id: str) -> bool:
+    """Require a deny covering the bucket and objects for every insecure principal."""
+    arn = {"Fn::GetAtt": [bucket_id, "Arn"]}
+    objects = {"Fn::Join": ["", [arn, "/*"]]}
+    for resource in template["Resources"].values():
+        if resource["Type"] != "AWS::S3::BucketPolicy":
+            continue
+        properties = resource.get("Properties", {})
+        if properties.get("Bucket") != {"Ref": bucket_id}:
+            continue
+        for statement in properties.get("PolicyDocument", {}).get("Statement", []):
+            actions = statement.get("Action", [])
+            resources = statement.get("Resource", [])
+            transport = statement.get("Condition", {}).get("Bool", {}).get("aws:SecureTransport")
+            if (
+                statement.get("Effect") == "Deny"
+                and statement.get("Principal") in ("*", {"AWS": "*"})
+                and (actions == "s3:*" or isinstance(actions, list) and "s3:*" in actions)
+                and (transport is False or transport == "false")
+                and arn in resources
+                and objects in resources
+            ):
+                return True
+    return False
 
 
 def validate_template(template: dict) -> list[str]:
@@ -30,6 +56,10 @@ def validate_template(template: dict) -> list[str]:
         for flag in PUBLIC_ACCESS_FLAGS:
             if block.get(flag) is not True:
                 errors.append(f"{logical_id}: {flag} must be true")
+        if not enforces_tls(template, logical_id):
+            errors.append(
+                f"{logical_id}: bucket policy must deny non-TLS access to bucket and objects"
+            )
     return errors
 
 

@@ -7,7 +7,7 @@ and Lambda; IAM, CloudFormation, logs, and bootstrap infrastructure support them
 
 ## Package and contracts
 
-- Distribution: **`cdk-launchpad`**, version **`0.1.0`** in `pyproject.toml`.
+- Distribution: **`cdk-launchpad`**, version **`0.1.1`** in `pyproject.toml`.
 - Imports: `from cdk_launchpad.constructs import SecureBucket, DocumentProcessor`.
 - `SecureBucket`: SSE-S3, all public-access blocks, TLS enforcement, generated name,
   demo-only `DESTROY` policy requiring manual emptying; no automatic object deletion.
@@ -17,7 +17,7 @@ and Lambda; IAM, CloudFormation, logs, and bootstrap infrastructure support them
 - Installed CLI: `cdk-launchpad-validate <assembly-directory> [other-directories...]`.
   `python -m cdk_launchpad.cli` is equivalent. It checks every application bucket,
   including those that bypass the construct, and exits 1 with resource-specific
-  errors for missing encryption/public-access blocking. This is a demo guardrail,
+  errors for missing encryption/public-access blocking or a bucket policy denying non-TLS access. This is a demo guardrail,
   not a complete security boundary.
 
 Source lives in `src/cdk_launchpad/`; tests in `tests/`. The optional
@@ -53,15 +53,15 @@ and standard Ubuntu runners, and never authenticates to AWS or deploys.
 Teams install the tagged source from the existing Platform repository:
 
 ```text
-cdk-launchpad @ git+https://github.com/slyncon/partenamut-cdk-use-case.git@v0.1.0
+cdk-launchpad @ git+https://github.com/slyncon/partenamut-cdk-use-case.git@v0.1.1
 ```
 
 The Platform repository is [slyncon/partenamut-cdk-use-case](https://github.com/slyncon/partenamut-cdk-use-case).
 Git is required by pip; no package registry or AWS access is needed.
 See [pip VCS dependencies](https://pip.pypa.io/en/stable/topics/vcs-support/).
 
-To release `0.1.1`, update `project.version`, validate/build, commit the change,
-and create/push a new `v0.1.1` tag. Keep existing release tags immutable. A team can
+For the next release, update `project.version`, validate/build, commit the change,
+and create/push a matching new tag. Keep existing release tags immutable. A team can
 change only its own dependency ref to `@v0.1.1`, reinstall with `--upgrade`, run CI
 checks and `cdk diff`, and deploy manually. Other teams can remain on `v0.1.0`.
 A full commit SHA may be used for stronger immutable dependency pinning.
@@ -84,7 +84,8 @@ on the plan. See [GitHub protected branches](https://docs.github.com/en/reposito
 Standard GitHub-hosted runners for public repositories are free; private repositories
 have plan-specific allowances. See [Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions).
 
-Deployment automation is future work: a protected deployment workflow could later
-use GitHub OIDC with a narrowly scoped AWS trust policy and deployment role, plus
-review/approval controls. This phase implements no OIDC, AWS keys, Secrets, or
-automated deployment. Team identities/accounts are still simulated, not isolated.
+Team A now pilots automated sandbox deployment through a separate job with GitHub
+OIDC, a dedicated CloudFormation role, and bounded Lambda permissions. Team B
+retains its previous library version and validation-only workflow. See
+[DEPLOYMENT.md](DEPLOYMENT.md) for the one-time setup, controls, and remaining limits.
+No AWS access keys or SSO tokens belong in GitHub. Team identities remain simulated.
