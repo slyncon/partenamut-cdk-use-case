@@ -16,8 +16,8 @@ jobs:
     timeout-minutes: 10
     env:
       AWS_EC2_METADATA_DISABLED: "true"
-      AWS_CONFIG_FILE: ${{ runner.temp }}/no-aws-config
-      AWS_SHARED_CREDENTIALS_FILE: ${{ runner.temp }}/no-aws-credentials
+      AWS_CONFIG_FILE: /tmp/cdk-launchpad-no-aws-config
+      AWS_SHARED_CREDENTIALS_FILE: /tmp/cdk-launchpad-no-aws-credentials
     steps:
       - uses: actions/checkout@v7
         with:
