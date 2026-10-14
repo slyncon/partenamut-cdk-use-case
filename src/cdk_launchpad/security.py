@@ -11,6 +11,30 @@ PUBLIC_ACCESS_FLAGS = (
 )
 
 
+def validate_resource_names(template: dict) -> list[str]:
+    """Keep AWS identities/tags generic; local paths and metadata are unaffected."""
+    errors = []
+
+    def check_fields(value, path):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                child_path = f"{path}.{key}"
+                if (key.endswith("Name") or key == "Tags") and "partenamut" in json.dumps(
+                    child
+                ).casefold():
+                    errors.append(f"{child_path}: AWS names and tags must be generic")
+                check_fields(child, child_path)
+        elif isinstance(value, list):
+            for child in value:
+                check_fields(child, path)
+
+    for logical_id, resource in template["Resources"].items():
+        if "partenamut" in logical_id.casefold():
+            errors.append(f"{logical_id}: AWS resource identities must be generic")
+        check_fields(resource.get("Properties", {}), logical_id)
+    return errors
+
+
 def enforces_tls(template: dict, bucket_id: str) -> bool:
     """Require a deny covering the bucket and objects for every insecure principal."""
     arn = {"Fn::GetAtt": [bucket_id, "Arn"]}
@@ -39,7 +63,7 @@ def enforces_tls(template: dict, bucket_id: str) -> bool:
 
 def validate_template(template: dict) -> list[str]:
     """Check every bucket, including resources created without SecureBucket."""
-    errors = []
+    errors = validate_resource_names(template)
     for logical_id, resource in template["Resources"].items():
         if resource["Type"] != "AWS::S3::Bucket":
             continue
@@ -76,6 +100,11 @@ def validate_assembly(directory: Path) -> int:
     errors = []
     for stack in stacks:
         filename = stack["properties"]["templateFile"]
+        stack_name = stack.get("properties", {}).get("stackName", "")
+        if "partenamut" in f"{filename} {stack_name}".casefold():
+            errors.append(f"{filename}: AWS stack names must be generic")
+        if "partenamut" in json.dumps(stack["properties"].get("tags", {})).casefold():
+            errors.append(f"{filename}: AWS stack tags must be generic")
         template = json.loads((directory / filename).read_text())
         errors.extend(f"{filename}: {error}" for error in validate_template(template))
     if errors:

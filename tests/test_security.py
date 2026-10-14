@@ -110,3 +110,38 @@ def test_empty_assembly_fails(tmp_path):
     (tmp_path / "manifest.json").write_text('{"artifacts": {}}')
     with pytest.raises(ValueError, match="No application stacks"):
         validate_assembly(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "properties",
+    [
+        {"BucketName": "partenamut-claims"},
+        {"FunctionName": "PartenamutClaims"},
+        {"RoleName": "partenamut-role"},
+        {"LogGroupName": "/aws/lambda/partenamut"},
+        {"Tags": [{"Key": "Project", "Value": "Partenamut"}]},
+        {"Tags": [{"Key": "partenamut", "Value": "Demo"}]},
+        {"Policies": [{"PolicyName": "partenamut-policy"}]},
+    ],
+)
+def test_aws_names_and_tags_must_be_generic(properties):
+    template = {"Resources": {"Example": {"Type": "AWS::IAM::Role", "Properties": properties}}}
+    assert any("generic" in error for error in validate_template(template))
+
+
+def test_local_repository_path_does_not_become_an_aws_naming_restriction():
+    template = {
+        "Resources": {
+            "Example": {
+                "Type": "AWS::IAM::Role",
+                "Properties": {"RoleName": "claims-reader"},
+                "Metadata": {"LocalPath": "/workspace/partenamut-cdk-use-case"},
+            }
+        }
+    }
+    assert validate_template(template) == []
+
+
+def test_generated_resource_prefix_cannot_contain_interview_name():
+    template = {"Resources": {"PartenamutRole": {"Type": "AWS::IAM::Role"}}}
+    assert any("generic" in error for error in validate_template(template))

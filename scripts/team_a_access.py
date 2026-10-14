@@ -1,4 +1,4 @@
-"""Generate Platform-owned IAM setup; generation itself never accesses AWS."""
+"""Future OIDC reference only; not required for manual CD. Generation is local."""
 
 import argparse
 import json

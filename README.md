@@ -1,36 +1,45 @@
 # CDK Launchpad Platform
 
-Reusable Python AWS CDK v2 components for Partenamut's AWS CDK Developer Enablement
-interview case. Independent team repositories consume a tagged version of this
-library and provide their own application handlers. Application services are S3
-and Lambda; IAM, CloudFormation, logs, and bootstrap infrastructure support them.
+A small Python AWS CDK v2 developer-enablement demonstration. Platform owns two
+reusable constructs; independent Claims and Medical Documents repositories own
+application stacks and handlers. The interview workflow is **automated CI with
+manual CD**: GitHub validates, then the developer reviews and deploys from WSL.
+Application services are S3 and Lambda; IAM, logs, CloudFormation and bootstrap
+resources support them.
 
-## Package and contracts
+## Repository ownership
 
-- Distribution: **`cdk-launchpad`**, version **`0.1.1`** in `pyproject.toml`.
-- Imports: `from cdk_launchpad.constructs import SecureBucket, DocumentProcessor`.
-- `SecureBucket`: SSE-S3, all public-access blocks, TLS enforcement, generated name,
-  demo-only `DESTROY` policy requiring manual emptying; no automatic object deletion.
-- `DocumentProcessor`: the consumer's Python 3.12 handler, 128 MB, ten-second timeout,
-  seven-day application logs, read access to its bucket, and direct S3 notifications
-  filtered to `incoming/*.json`. CDK also generates a notification helper.
-- Installed CLI: `cdk-launchpad-validate <assembly-directory> [other-directories...]`.
-  `python -m cdk_launchpad.cli` is equivalent. It checks every application bucket,
-  including those that bypass the construct, and exits 1 with resource-specific
-  errors for missing encryption/public-access blocking or a bucket policy denying non-TLS access. This is a demo guardrail,
-  not a complete security boundary.
+```text
+workspace/
+├── partenamut-cdk-use-case/  # Existing local/Git Platform name, preserved
+├── cdk-team-a/              # ClaimsTeamStack
+└── cdk-team-b/              # MedicalDocumentsTeamStack
+```
 
-Source lives in `src/cdk_launchpad/`; tests in `tests/`. The optional
-`scripts/validate_synth.py` is a thin compatibility wrapper, not another checker.
-No team code or deployment app is included in this repository. The retained
-`package.json`/lockfile pin the optional local CDK CLI; each team installs its own CLI.
-Virtual environments, caches, dependencies, generated templates, and local assistant
-instructions are ignored by Git and are not part of the published package.
+The local/Git names do not become AWS resource names. AWS names/tags remain generic;
+existing stack and stateful construct IDs are preserved. There is no Platform
+application stack to synthesize/deploy in this directory.
 
-## Local validation and package build
+## Shared package and security
 
-Prerequisites: Python 3.12, Node 24 LTS, Git. Node runs the CDK Python language
-bridge. No AWS credentials are required.
+Distribution `cdk-launchpad`, version **0.1.2**; imports use `cdk_launchpad`.
+
+- `SecureBucket`: SSE-S3, block all public access, enforce TLS, generated name, and
+  demo-only DESTROY without automatic object deletion.
+- `DocumentProcessor`: team's Python 3.12 handler, 128 MB, ten-second timeout,
+  seven-day application logs, bucket read grant, direct `incoming/*.json` notifications.
+- `cdk-launchpad-validate`: checks actual application templates for bucket encryption,
+  all public-access flags, TLS and generic AWS identities/names/tags. It rejects
+  insecure raw buckets too. Local paths and repository URLs are unaffected.
+
+Both teams consume the tested release at an immutable source commit. Third-party
+Python dependencies are hash-locked in Team A; action versions are full commit pins.
+A new release does not automatically change an existing deployed stack.
+
+## Local Platform validation
+
+Prerequisites: Python 3.12, Node 24 LTS/npm, Git. AWS CLI v2 is needed only for the
+human-operated cloud steps. Node runs CDK's Python bridge and CLI; handlers are Python.
 
 ```bash
 python3.12 -m venv .venv
@@ -38,57 +47,68 @@ source .venv/bin/activate
 python -m pip install -r requirements.txt -r requirements-dev.txt
 python -m ruff check .
 python -m pytest -q
+python -m bandit -r src scripts -ll
+python -m pip_audit --skip-editable
 python -m build --wheel --outdir .build/dist
 python -m pip install --force-reinstall --no-deps .build/dist/*.whl
 cdk-launchpad-validate --help
 python -m pytest -q
 ```
 
-`.github/workflows/ci.yml` repeats lint/tests, builds the wheel, installs it, and
-retests it on PRs targeting `main` and pushes to `main`. It uses `contents: read`
-and standard Ubuntu runners, and never authenticates to AWS or deploys.
+GitHub repeats tests/lint/scans, builds and installs the wheel, then retests it.
+It has read-only repository permissions and no AWS credentials or deployment.
+Vulnerability/secret scans complement tests; they do not prove complete security.
+Virtual environments, dependencies, caches, generated assemblies and local assistant
+instructions are ignored by Git.
 
-## Versioned consumption
+## Interview target and deployment
 
-Release tags label versions; each team installs the full source commit from its
-`requirements.txt`:
+Target account **117301763389**, region **eu-central-1**, IAM Identity Center
+profile **cdk-sso**. Assume the profile is configured; authenticate with SSO rather
+than creating IAM users/access keys. No GitHub AWS secrets or OIDC roles are required.
 
-```text
-cdk-launchpad @ git+https://github.com/slyncon/partenamut-cdk-use-case.git@<full-release-commit>
+From a team directory with its environment and CDK CLI active:
+
+```bash
+aws sso login --profile cdk-sso
+export AWS_REGION=eu-central-1
+export AWS_DEFAULT_REGION=eu-central-1
+aws sts get-caller-identity --profile cdk-sso
+# One-time, manually; the target currently has no CDKToolkit stack.
+cdk bootstrap aws://117301763389/eu-central-1 --profile cdk-sso --termination-protection
+cdk diff ClaimsTeamStack --profile cdk-sso --change-set false
+cdk deploy ClaimsTeamStack --profile cdk-sso
 ```
 
-The Platform repository is [slyncon/partenamut-cdk-use-case](https://github.com/slyncon/partenamut-cdk-use-case).
-Git is required by pip; no package registry or AWS access is needed.
-See [pip VCS dependencies](https://pip.pypa.io/en/stable/topics/vcs-support/).
+Confirm the account and wait for successful CI before deployment. The default
+synthesizer uses standard CDK bootstrap roles; no deleted custom execution role
+or external boundary policy is needed. Team A creates its runtime boundary inside
+its stack, so application restrictions remain while IAM provisioning is self-contained.
+Default bootstrap execution privileges are broader than the archived scoped role;
+this is a sandbox demonstration, not production deployment isolation.
 
-For the next release, update `project.version`, validate/build, commit the change,
-and create/push a matching new tag. Keep existing release tags immutable. A team can
-change only its own dependency ref to the new full commit, reinstall, run CI
-checks and `cdk diff`, and deploy manually. Other teams can remain on `v0.1.0`.
-Both current consumers use full commit pins. Team A also verifies hashes of locked
-third-party dependencies. A package registry is not needed for this pilot.
+[DEPLOYMENT.md](DEPLOYMENT.md) gives the full checks, first bootstrap, upload/log
+commands, account guards, replacement-risk review, permission requirements and cleanup.
+Do not destroy CDKToolkit. No cloud commands were executed during this update.
 
-See **[MIGRATION.md](MIGRATION.md)** for the three-repository layout, release order,
-CI security demonstration, and deployment compatibility checks.
+## Releases and progressive adoption
 
-## Deployment and scope
+Platform tests/scans/builds changes, publishes a matching version/tag at the tested
+commit, and announces the full commit in release notes. Each team manually updates
+its source pin, validates, reviews the live diff and deploys independently. Do not
+move released tags. See [MIGRATION.md](MIGRATION.md) for ownership/release details.
 
-This library repository has no AWS stack to deploy or destroy. Teams independently
-run their own CDK apps. Team A targets the new personal account through the
-GitHub `sandbox` environment variables; Team B retains manual deployment. The
-existing corporate sandbox and its resources are separate and remain untouched.
+Required PR checks and reviews must be configured in GitHub; CODEOWNERS alone is
+not enforcement. Keep workflow/dependency/security-policy changes reviewable.
+Future OIDC automation is archived outside the active workflow and is a proposal
+requiring revised IAM permissions and validation before restoration. Current CI
+cannot bootstrap, deploy or destroy resources.
 
-Branch protection should require the `Validate platform` check after its first
-successful run. Require PR review, current passing checks, and restrict bypass,
-force pushes, and branch deletion where supported. GitHub Free supports protected
-branches on public repositories; availability for private repositories depends
-on the plan. See [GitHub protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches).
+## Short demo story
 
-Standard GitHub-hosted runners for public repositories are free; private repositories
-have plan-specific allowances. See [Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions).
-
-Team A now pilots automated sandbox deployment through a separate job with GitHub
-OIDC, a dedicated CloudFormation role, and bounded Lambda permissions. Team B
-retains its previous library version and validation-only workflow. See
-[DEPLOYMENT.md](DEPLOYMENT.md) for the one-time setup, controls, and remaining limits.
-No AWS access keys or SSO tokens belong in GitHub. Team identities remain simulated.
+The Claims team chooses Platform's secure bucket and processor, supplies its own
+handler, and proposes infrastructure in its own repository. CI rejects insecure
+configuration and verifies the application. The developer reviews the diff and
+manually deploys using SSO. Uploading a fictional claim causes a read/validate/log
+result. Medical Documents reuses the same components independently. Platform
+maintains standards without writing every team's resources.

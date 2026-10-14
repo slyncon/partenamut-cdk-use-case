@@ -1,197 +1,216 @@
-# Team A automated sandbox deployment
+# Interview deployment: automated CI, manual CD
 
-Team A is the pilot. Platform maintains its AWS deployment access, while Team A
-owns the application pipeline. Team B remains validation-only on Platform 0.1.0.
-The two application services remain S3 and Lambda. New resources are supporting
-IAM/OIDC access controls, not an additional application service.
+GitHub Actions validates the code. After a successful run, you review and deploy
+from WSL using AWS IAM Identity Center (SSO) profile **`cdk-sso`**.
 
-## Credentials: temporary identity, no stored AWS keys
+| Setting | Interview target |
+| --- | --- |
+| AWS account | `117301763389` |
+| Deployment region | `eu-central-1` |
+| Local profile | `cdk-sso` |
+| CloudFormation stacks | `ClaimsTeamStack`, `MedicalDocumentsTeamStack` |
+| Bootstrap stack | Standard `CDKToolkit` |
 
-The initial setup uses an authenticated administrative identity in your **personal**
-AWS account. The corporate sandbox/profile is not used. GitHub uses OIDC:
-GitHub identifies a job to AWS, and AWS issues temporary credentials for that job.
-Do not copy access keys, SSO tokens, or `~/.aws` files into GitHub or the repository.
-Only the deployment job can request an OIDC token; validation has no AWS access.
+The local directory and Git repository `partenamut-cdk-use-case` keep their names.
+AWS resource names/tags use generic identifiers; the shared validator rejects
+`partenamut` in AWS identities, name properties and tags. Existing bucket/function
+construct paths and logical IDs remain unchanged. No AWS resources were renamed
+or changed while preparing this update.
 
-GitHub's trust is limited to the exact Team A repository and `sandbox` environment.
-This repository was created after GitHub introduced immutable OIDC subjects, so
-its owner and repository IDs are included. The subject is:
+## 1. Local setup and validation
 
-```text
-repo:slyncon@15962517/cdk-team-a@1417529910:environment:sandbox
-```
+Clone the three repositories as siblings. Platform is a Python library, not a
+stack to deploy. Team A contains the app. Install Python 3.12, Node 24 LTS/npm,
+Git and AWS CLI v2; create a fresh environment rather than copying another laptop's
+virtual environment or node_modules.
 
-The GitHub environment must restrict deployment branches to `main`. The subject
-identifies the environment; that branch restriction supplies the branch control.
-Do not weaken trust to `repo:slyncon/*` or a wildcard environment.
-
-## One-time Platform setup
-
-No AWS resources have been created for this phase. Once the personal account is
-ready, authenticate your CLI using a temporary administrative session for that
-account. Do not paste credentials into chat. The commands below use your personal
-profile; configuring authentication is a separate AWS prerequisite. A console
-CloudShell session with the necessary administrative permissions is another way
-to perform initial setup without configuring laptop access keys.
-
-From Platform, choose the profile/region and prepare the tools:
+From `cdk-team-a`:
 
 ```bash
-export PERSONAL_AWS_PROFILE="<your-personal-account-profile>"
-export AWS_REGION="<your-deployment-region>"
-export AWS_DEFAULT_REGION="$AWS_REGION"
+python3.12 -m venv .venv
 source .venv/bin/activate
+python -m pip install --require-hashes -r requirements.lock
+python -m pip install --no-deps --no-build-isolation -r requirements.txt
+python -m pip check
 npm ci
 export PATH="$PWD/node_modules/.bin:$PATH"
-python scripts/team_a_access.py \
-  --subject 'repo:slyncon@15962517/cdk-team-a@1417529910:environment:sandbox'
-aws sts get-caller-identity --profile "$PERSONAL_AWS_PROFILE"
-aws cloudformation validate-template --template-body file://.build/team-a-access.json \
-  --profile "$PERSONAL_AWS_PROFILE" --region "$AWS_REGION"
+python -m ruff check .
+python -m pytest -q
+cdk ls
+cdk synth
+cdk-launchpad-validate .build/cdk.out
+python scripts/check_assembly.py .build/cdk.out
 ```
 
-Confirm the identity is your personal account before making changes. The first
-setup creates a GitHub OIDC provider, two roles, and a runtime permissions
-boundary. This template expects no existing GitHub provider. If one already exists,
-stop and adapt the template to reference the existing provider rather than creating
-or taking ownership of it. Generated templates and account-specific outputs are
-ignored by Git.
+Those tests and synthesis require no AWS credentials. Security audits contact
+public advisory databases; CI additionally runs Bandit, pip-audit, npm audit and
+Gitleaks. After committing an application change, wait for **Validate team** in
+GitHub Actions to pass. Deploy the same reviewed commit from a clean checkout;
+CI does not automatically restrict what an administrative SSO user can deploy.
 
-Review the template before the following human-operated setup command:
+## 2. Authenticate and verify the account
+
+Assume `cdk-sso` is configured for IAM Identity Center. Do not create IAM users or
+long-lived access keys, copy credentials into GitHub, or modify profile files as
+part of the application. Refresh the temporary SSO session:
 
 ```bash
-aws cloudformation deploy --stack-name CDKLaunchpadTeamAAccess \
-  --template-file .build/team-a-access.json --capabilities CAPABILITY_NAMED_IAM \
-  --profile "$PERSONAL_AWS_PROFILE" --region "$AWS_REGION"
-aws cloudformation describe-stacks --stack-name CDKLaunchpadTeamAAccess \
-  --query 'Stacks[0].Outputs' --output table \
-  --profile "$PERSONAL_AWS_PROFILE" --region "$AWS_REGION"
+aws sso login --profile cdk-sso
+export AWS_REGION=eu-central-1
+export AWS_DEFAULT_REGION=eu-central-1
+aws sts get-caller-identity --profile cdk-sso
 ```
 
-For an existing Claims stack, attach the new `LambdaBoundaryArn` output to its
-existing Lambda roles before enabling GitHub deployment. List the exact roles:
+Confirm the returned account is **117301763389** before continuing. An optional
+shell guard prevents continuing with another account:
 
 ```bash
-aws cloudformation list-stack-resources --stack-name ClaimsTeamStack \
-  --query "StackResourceSummaries[?ResourceType=='AWS::IAM::Role'].PhysicalResourceId" \
-  --output table --profile "$PERSONAL_AWS_PROFILE" --region "$AWS_REGION"
+test "$(aws sts get-caller-identity --profile cdk-sso --query Account --output text)" = "117301763389"
 ```
 
-For each specifically verified Claims role, use the boundary output ARN:
+The deployment region is independent of the SSO authentication region. Do not
+change the SSO authentication region based on this guide.
+
+## 3. Bootstrap once — human-operated only
+
+The user reports that this account/region has no `CDKToolkit` stack. From Team A
+with its environment and pinned CDK CLI active, run:
 
 ```bash
-aws iam put-role-permissions-boundary --role-name '<verified-Claims-role>' \
-  --permissions-boundary '<LambdaBoundaryArn-output>' --profile "$PERSONAL_AWS_PROFILE"
+cdk bootstrap aws://117301763389/eu-central-1 --profile cdk-sso --termination-protection
 ```
 
-This narrows existing role permissions immediately; the updated app subsequently
-records the same boundaries in CloudFormation. It is a one-time migration step.
-Do not apply the boundary to your SSO identity, bootstrap roles, deployment role,
-or another team's roles.
+This creates CDK's supporting asset bucket, SSM version parameter, and standard
+publishing/deployment/CloudFormation roles (plus standard bootstrap infrastructure).
+It is not an application deployment. It must never run in CI. Keep the bootstrap
+stack; do not delete/recreate it to clean up the demonstration.
 
-A new personal account also needs CDK bootstrap resources once per target region:
+The SSO permission set must allow bootstrap provisioning and subsequent use of
+the standard CDK roles. If bootstrap or AssumeRole fails, fix the SSO permission
+set/trust with the account administrator. Do not invent access keys or restore
+the deleted custom role as a shortcut. Default bootstrap CloudFormation permissions
+are broad; they suit this disposable sandbox, not a production isolation claim.
+
+## 4. Review, validate, then deploy Claims
 
 ```bash
-cdk bootstrap --profile "$PERSONAL_AWS_PROFILE"
+cdk diff ClaimsTeamStack --profile cdk-sso --change-set false
+cdk synth ClaimsTeamStack --profile cdk-sso
+cdk-launchpad-validate .build/cdk.out
+python scripts/check_assembly.py .build/cdk.out
+cdk deploy ClaimsTeamStack --profile cdk-sso
 ```
 
-Set the same `AWS_REGION`/`AWS_DEFAULT_REGION` above before bootstrapping. This
-creates CDK's supporting asset bucket and roles. GitHub does not bootstrap, and
-the pipeline does not assume the bootstrap administrator roles. Do not run this
-against the corporate account. Do not destroy an existing shared bootstrap stack.
+The diff uses a template comparison without creating an AWS change set. Review it
+and the interactive deployment approval before continuing. Stop if it proposes
+unexpected removal/replacement of an existing bucket, function name changes, or
+a move to a different stack/account. No stack name or stateful construct ID was
+changed for this migration.
 
-The boundary migration commands above are only for a pre-existing personal Claims
-stack. A fresh personal-account deployment creates bounded roles directly; it
-does not require those migration commands or copy corporate documents.
+For a previously deployed custom-role stack, expected template changes include
+one new stack-owned managed boundary policy and updating Lambda roles to reference
+it. File assets move from the former `claims/` prefix to standard CDK hash keys,
+which can update Lambda code locations without changing their logical IDs. Review
+any actual replacements instead of assuming these are harmless in your live stack.
 
-## GitHub configuration, step by step
+`app.py` uses the default CDK synthesizer. It does not reference a deleted custom
+CloudFormation role, GitHub role or external boundary ARN. Standard CDK bootstrap
+roles handle deployment; application Lambda roles are created by the stack.
 
-In **cdk-team-a → Settings → Environments**:
+## 5. Upload one fake claim and inspect logs
 
-1. Create `sandbox`.
-2. Under deployment branches/tags, select specific branches and allow only `main`.
-3. Add environment **variables**, not secrets:
-   - `AWS_ACCOUNT_ID`: the account returned by your identity check.
-   - `AWS_REGION`: your selected deployment region (for example `eu-central-1`).
-   - `AWS_ROLE_ARN`: the `GitHubRoleArn` output above, or a role with equivalent
-     scoped permissions and trust. The workflow validates that it belongs to
-     `AWS_ACCOUNT_ID`; no corporate role is hardcoded.
-4. Optionally add a required reviewer to pause before deployment. For a solo sandbox
-   demo this can be omitted; automatic deployment still remains limited to `main`.
+Use the actual CloudFormation outputs; do not guess resource names:
 
-In **Settings → Rules / Branches**, protect `main`: require pull requests and the
-`Validate team` check, disallow force pushes/deletion, and restrict bypass where
-supported. Require CODEOWNERS review of workflows, dependency pins, and deployment
-scripts when another reviewer is available. A solo author cannot approve their own
-PR. CODEOWNERS files describe ownership; settings make those reviews mandatory.
+```bash
+CLAIMS_BUCKET=$(aws cloudformation describe-stacks --stack-name ClaimsTeamStack \
+  --query "Stacks[0].Outputs[?OutputKey=='BucketName'].OutputValue | [0]" --output text \
+  --profile cdk-sso --region eu-central-1)
+CLAIMS_LOG_GROUP=$(aws cloudformation describe-stacks --stack-name ClaimsTeamStack \
+  --query "Stacks[0].Outputs[?OutputKey=='LogGroupName'].OutputValue | [0]" --output text \
+  --profile cdk-sso --region eu-central-1)
 
-Apply equivalent protection to Platform and its `Validate platform` check. Protect
-published release tags against update/deletion or use GitHub immutable releases.
-Git access alone cannot configure these settings; verify them in GitHub.
-
-After the personal-account IAM setup, bootstrap, and environment variables have
-been verified, add a **repository variable** under Settings → Secrets and variables
-→ Actions → Variables:
-
-```text
-ENABLE_SANDBOX_DEPLOYMENT=true
+test -n "$CLAIMS_BUCKET" && test "$CLAIMS_BUCKET" != "None"
+test -n "$CLAIMS_LOG_GROUP" && test "$CLAIMS_LOG_GROUP" != "None"
+aws s3 cp fixtures/claim.json "s3://$CLAIMS_BUCKET/incoming/claim.json" \
+  --profile cdk-sso --region eu-central-1
+aws logs tail "$CLAIMS_LOG_GROUP" --since 10m \
+  --profile cdk-sso --region eu-central-1
 ```
 
-This is an explicit activation switch, not a secret. Keep it unset or `false` until
-AWS setup is complete. It is repository-scoped because GitHub evaluates deployment
-job conditions before environment-scoped variables are available. Remove it or
-set it to `false` to stop future deployments without disabling validation.
-No AWS deployments or access resources are created during pipeline preparation.
+Notifications are asynchronous; wait briefly and repeat the log read if needed.
+The handler reads and validates fictional claim JSON and logs a processing result.
+It never updates objects, approves claims or pays money. Duplicate events are safe
+to repeat. The current MVP has no durable dead-letter design.
 
-## What happens when Team A runs
+Team B can be deployed independently from its own directory with
+`cdk diff MedicalDocumentsTeamStack --profile cdk-sso --change-set false` and
+`cdk deploy MedicalDocumentsTeamStack --profile cdk-sso` after its validation passes.
+See its README for its metadata fixture and outputs.
 
-Deployment is disabled until the sandbox environment allows only `main` and the
-`main` branch is protected with the required `Validate team` check, and the
-activation switch is enabled. This readiness gate uses public GitHub metadata and
-does not prevent validation or development while settings are missing.
+## 6. Security that remains active
 
-A PR runs validation and never deploys. A push to `main`, or **Actions → CI and
-sandbox deployment → Run workflow** on `main`, runs validation and then a separate
-`Deploy Claims sandbox` job. Weekly scheduled scans never deploy.
+- Shared S3 defaults: SSE-S3, block-all-public-access, TLS denial, generated names.
+- Shared template gate: encryption, all four public-access flags, TLS and generic
+  AWS naming, including raw buckets bypassing the shared construct.
+- Python/handler/infrastructure tests, Ruff, Bandit, Gitleaks, pip-audit and npm audit.
+- Immutable Platform/action commit pins; Team A's hashed Python dependency lock.
+- Team A's runtime permissions boundary is **created inside ClaimsTeamStack** and
+  attached to both its application role and CDK notification-helper role. It caps
+  reads at its exact bucket's `incoming/` objects, bucket metadata/notification
+  operations, and application/helper logs. It does not grant permissions by itself.
+- CI checks that boundary contents are narrow, every role references the owned
+  policy, roles trust only Lambda, resources stay within the permitted services,
+  and synthesis uses standard bootstrap roles/assets. Negative tests prove bypasses
+  fail; a dependency-cycle test covers the new policy references.
 
-Validation installs the platform at a full commit SHA and verifies hashes of locked
-third-party packages. It runs Ruff, pytest, Bandit, pip-audit, npm audit, Gitleaks,
-S3 encryption/public-access/TLS policy checks, and the Claims-specific boundary and
-resource checks. Vulnerability auditing contacts public advisory databases; local
-unit tests and synthesis remain credential-free.
+Removing an external boundary dependency does not remove the boundary restriction.
+The deleted custom deployment role and its scoped CloudFormation restrictions are
+not active controls. Human deployment now relies on the SSO permission set and
+standard bootstrap roles; the runtime boundary does not limit an administrator or
+CloudFormation itself. Required PR checks/reviews depend on real GitHub settings.
+These are demo guardrails, not a complete compliance boundary.
 
-The job uploads the synthesized assembly and records its SHA-256 manifest. Deployment
-checks those hashes, rechecks infrastructure policy, and deploys that assembly
-without resynthesizing. It obtains AWS credentials only after dependency installation
-and local validation. Artifacts expire after seven days.
+## 7. CI cannot deploy; OIDC is future work
 
-Deployment then prints a diff and creates a CloudFormation change set without
-executing it. A check rejects S3 bucket removal, replacement, or uncertain replacement.
-A safe change set is executed; an empty one is reported as no change. Deployments
-are serialized and an in-flight deployment is not cancelled by a newer push.
-The Actions summary records the source commit and actual stack outputs.
+All active workflows are validation-only, including manual workflow runs and
+scheduled checks. Team A has no deployment job, AWS credential action, OIDC-token
+permission, GitHub environment prerequisite, or deployment activation variable
+in its active workflow. Existing `AWS_ROLE_ARN`/`ENABLE_SANDBOX_DEPLOYMENT` settings
+cannot activate a job that no longer exists; remove obsolete settings if desired.
 
-For an existing personal-account stack, the first update adds boundaries and changes handler asset keys to the scoped
-`claims/` bootstrap prefix. Bucket/function logical IDs remain stable. Review the
-first diff: those changes are expected; bucket replacement is not.
+The previous implementation is retained at Team A's
+`future/oidc-deployment.yml.disabled`, outside `.github/workflows`, and its archived
+deployment job additionally has `if: ${{ false }}`. Platform's
+`scripts/team_a_access.py` and the change-set/readiness helper tests are retained
+as future references. None is required for manual deployment; do not provision the
+old access template for this interview.
 
-## AWS permission limits
+Future OIDC deployment needs a new review of trust, limited deployment/execution
+permissions, stack-owned policy management, artifact promotion and approvals.
+The archived workflow and old `claims/` asset permissions require adaptation to the
+current standard-bootstrap path. Simply renaming/re-enabling the archive is unsafe
+and is not a supported setup instruction.
 
-`CDKLaunchpad-TeamA-GitHubDeploy` can prepare/execute Claims change sets, upload only
-`claims/` assets in the existing bootstrap bucket, and pass only the dedicated Claims
-CloudFormation role. It cannot assume shared bootstrap admin roles or destroy stacks.
+## 8. Deliberate manual cleanup
 
-`CDKLaunchpad-TeamA-CloudFormation` manages Claims-prefixed S3/Lambda/log resources
-and Claims Lambda roles. New Lambda roles must carry the specified boundary. Runtime
-roles are capped at reading Claims `incoming/` objects, writing Claims logs, and the
-notification helper's Claims bucket-notification operations. There is no application
-S3 object write permission. CDK's helper may request broader identity permissions,
-but the boundary limits their effective access.
+Before destruction, verify identity and the exact demo bucket/output names again.
+List the specifically identified bucket. Only when you intend to delete that
+synthetic demo data, empty it and destroy the application stack:
 
-This is a sandbox control set, not organization-wide enforcement. Maintainers can
-change repository code or AWS policies. Required protected reviews are necessary to
-protect checks from being removed. The custom policy checker handles the current
-flat application templates, not arbitrary nested stacks or all AWS security rules.
-The change-set check prevents bucket replacement, but cannot judge every business or
-application change. No scanner guarantees that all vulnerabilities or secrets are
-found. Teardown remains deliberate and manual; pipeline jobs never empty buckets.
+```bash
+aws sts get-caller-identity --profile cdk-sso
+aws s3 ls "s3://$CLAIMS_BUCKET/" --recursive --profile cdk-sso --region eu-central-1
+# Destructive commands: run only after verifying this is the disposable Claims bucket.
+aws s3 rm "s3://$CLAIMS_BUCKET/" --recursive --profile cdk-sso --region eu-central-1
+cdk destroy ClaimsTeamStack --profile cdk-sso
+```
+
+Automatic object deletion is disabled. The current bucket is not versioned; if
+versioning is introduced later, remove all versions/delete markers before stack
+teardown. The stack-owned boundary is cleaned up with the application; this does
+not delete shared bootstrap roles. Keep `CDKToolkit`. Check budget/billing before
+deployment; this example does not promise a zero-dollar bill.
+
+No bootstrap, deployment, IAM provisioning, fixture upload or teardown was executed
+while implementing this final workflow. Live SSO permissions, deployment and logs
+remain to be verified by the human-operated AWS demonstration.

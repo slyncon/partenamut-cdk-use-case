@@ -1,78 +1,65 @@
-# Repository ownership and versioned consumption
+# Final interview ownership and deployment approach
 
-```text
-partenamut-business-case/
-├── partenamut-cdk-use-case/   # Platform library, shared security checks, AWS access setup
-├── cdk-team-a/               # Claims application; automated-deployment pilot
-└── cdk-team-b/               # Medical documents application; validation-only CI
-```
+Three sibling repositories remain: `partenamut-cdk-use-case` (Platform),
+`cdk-team-a` (Claims), and `cdk-team-b` (Medical Documents). Local directories,
+GitHub repository names and Python package imports are unchanged. Do not recreate
+the retired duplicate Platform directory or old teams workspace.
 
-These are three independent repositories, not branches of one repository.
-The duplicate platform copy and old teams workspace were removed. The existing
-Platform repository and Git history were retained. No fourth repository is needed.
+## Automated CI, manual CD
 
-Both teams install the same Python distribution, `cdk-launchpad`, and import the
-same two constructs. Team A selects Platform 0.1.1; Team B retains 0.1.0.
-Both source dependencies are pinned to full commit IDs, so moving a tag cannot
-change the installed code. Team A additionally locks third-party dependencies
-and their hashes. Each repository owns its local environment and tooling.
-Environments, node_modules, caches, CDK assets, credentials, and local assistant
-instructions stay out of Git.
+All active workflows validate only. Team A's prior deployment workflow is archived
+outside `.github/workflows` with its deployment job also disabled unconditionally.
+Neither GitHub variables nor a workflow_dispatch event can activate AWS deployment
+in the active interview pipeline. Developer workflow training and future OIDC
+rollout remain later phases.
 
-## Platform release order
+The interview target is account `117301763389`, region `eu-central-1`, profile
+`cdk-sso`, authenticated through IAM Identity Center. Bootstrap is a one-time
+human operation; application deployment uses the standard bootstrap roles.
+Read [DEPLOYMENT.md](DEPLOYMENT.md) before cloud operations.
 
-1. Update the package version and release notes; run tests, lint, security scans,
-   and the package build/install check.
-2. Commit and push; confirm the hosted `Validate platform` check passes.
-3. Tag that tested commit with the matching version, then push the new tag.
-4. A consumer updates its full source commit, reviews dependency/lock changes,
-   validates, and adopts independently. Other consumers keep their chosen version.
+## IAM dependency adaptation
 
-For example, from Platform after the corresponding tested commit exists:
+The deleted custom role and imported boundary ARN no longer appear in Team A's
+active app. Its permissions boundary remains, but is now created/managed inside
+ClaimsTeamStack and checked for equivalent narrow runtime permissions. CI expects
+standard deployment/execution/publishing roles instead of the deleted role and
+`claims/` bootstrap asset convention. The runtime boundary does not restrict the
+human administrator or the broad default bootstrap execution role.
 
-```bash
-git tag -a v0.1.1 -m "Platform 0.1.1: S3 TLS policy validation"
-git push origin v0.1.1
-```
+No bucket/function identity was renamed. New managed-policy creation, runtime
+boundary references and asset key changes must be reviewed in any existing stack's
+diff. No AWS changes, role deletions or data migrations were performed by this work.
 
-Do not move published tags. Protect release tags or enable immutable releases in
-GitHub. Full source pins already protect consumer installations, even before those
-server-side release settings are configured. All CI actions are also pinned to
-full commits; dependency updates should be proposed and validated, not silently
-applied during builds.
+## Versioning
 
-## Deployment account change
+Platform 0.1.2 adds generic AWS naming validation while preserving the same two
+constructs and their defaults. Both consumers explicitly adopt its tested full
+source commit. This also gives Team B the shared TLS template gate introduced
+in 0.1.1; its application already enforced TLS through SecureBucket.
 
-Team A will deploy to a **new personal AWS account**, configured through GitHub
-`sandbox` environment variables. Its corporate sandbox stack is separate and
-remains untouched. The account and deployment role have not yet been supplied;
-no resources are created automatically as part of this preparation.
+Release order: update version and tests, validate/build/scan, commit and push,
+confirm Platform CI, tag that tested commit, then update consumer pins and validate.
+Tags are human-readable labels; immutable source commits determine installed code.
+Never move a published tag. Team A's third-party hash lock does not need regeneration
+when Platform's dependency set is unchanged. Review any actual lock/dependency changes.
 
-Stack names and bucket/function construct IDs are preserved. A different AWS
-account/region means a separate deployment, even with the same stack name.
-No corporate data is copied, deleted, or required for the new account.
+## Naming and scope
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) for one-time personal-account bootstrap/IAM/OIDC
-setup, GitHub protections, credentials, and the two-job workflow. Team A's README
-provides local validation, fixture uploads, logs and deliberate manual teardown.
+AWS stack/resource identities, name properties and tags must be generic. The shared
+validator catches the interview company name in those fields, including raw
+resources. It does not reject the preserved local directory/repository name or
+metadata paths. Use generated names to avoid global collisions; review replacement
+risks instead of renaming existing deployed resources casually.
 
-## Security demonstration
+The application still uses S3 and Lambda only. IAM/Logs/CloudFormation/bootstrap
+are supporting resources. Fixtures are fictional; handlers read, validate and log,
+never write into the triggering prefix or claim exactly-once processing.
 
-From a configured Team A development environment:
+## Future deployment reference
 
-```bash
-python scripts/security_demo.py secure
-cdk-launchpad-validate .build/security-demo
-python scripts/security_demo.py insecure
-cdk-launchpad-validate .build/security-demo
-```
-
-The insecure command deliberately exits 1. Correct by rerunning `secure` and the
-check. Never deploy `SecurityDemo`. For a visible failing PR, temporarily add the
-insecure command/check as a workflow step on a demonstration branch; correct it
-to show green, then remove that temporary step. Do not merge an intentional failure.
-
-A claim fixture is fictional JSON containing a fake ID, category and amount.
-Processing means reading, validating and logging; it does not approve or pay a
-claim. The second team processes fictional document metadata. Both handlers are
-read-only and safe to repeat when S3 delivers duplicate events.
+Platform's IAM/OIDC generator and Team A's archived workflow/change-set helpers
+remain reviewable examples. They are not required for the interview. Reintroducing
+OIDC requires explicit authorization, protected environments, scoped IAM compatible
+with stack-owned boundary creation and the selected synthesizer, artifact promotion,
+and a live deployment proof. See Team A's `future/README.md` for the archive limits.
