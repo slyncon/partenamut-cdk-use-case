@@ -65,7 +65,10 @@ Confirm the returned account is **117301763389** before continuing. An optional
 shell guard prevents continuing with another account:
 
 ```bash
-test "$(aws sts get-caller-identity --profile cdk-sso --query Account --output text)" = "117301763389"
+test "$(aws sts get-caller-identity --profile cdk-sso --query Account --output text)" = "117301763389" || {
+  echo "Wrong AWS account; stop before bootstrap or deployment."
+  exit 1
+}
 ```
 
 The deployment region is independent of the SSO authentication region. Do not
